@@ -48,14 +48,36 @@ if [ "$BUILD_TYPE" = "release" ] && [ -n "${KEYSTORE_B64:-}" ]; then
 fi
 
 GRADLE_SIGN_ARGS=()
+GRADLE_EXTRA_ARGS=()
+
 if [ -n "$KS_FILE" ]; then
-  # AGP 内置的"无侵入签名"属性：不改动项目里的 signingConfigs 即生效
+  # ① AGP 内置的无侵入签名（通用）
   GRADLE_SIGN_ARGS=(
     "-Pandroid.injected.signing.store.file=$KS_FILE"
     "-Pandroid.injected.signing.store.password=${KS_PASS:-}"
     "-Pandroid.injected.signing.key.alias=${KEY_ALIAS:-}"
     "-Pandroid.injected.signing.key.password=${KEY_PASS:-}"
   )
+  # ② 有的工程从 local.properties 读 signing.*（如 web-to-app-test）
+  LP="$GRADLE_DIR/local.properties"
+  touch "$LP"
+  grep -v '^signing\.' "$LP" > "$LP.tmp" 2>/dev/null || true
+  mv "$LP.tmp" "$LP" 2>/dev/null || true
+  cat >> "$LP" <<EOF
+signing.storeFile=$KS_FILE
+signing.storePassword=${KS_PASS:-}
+signing.keyAlias=${KEY_ALIAS:-}
+signing.keyPassword=${KEY_PASS:-}
+EOF
+  echo "    已写入 $LP 的 signing.* 配置"
+else
+  # 没有 keystore：需要放行「配置阶段就强制要求 release 签名」的工程。
+  # 这类工程 buildTypes.release{} 里有 throw，不传开关连 assembleDebug 都会在
+  # 配置阶段直接失败。未知该属性的工程会忽略它，所以加上是安全的。
+  GRADLE_EXTRA_ARGS+=("-PallowDebugSignedRelease=true")
+  if [ "$BUILD_TYPE" = "release" ]; then
+    echo "    ⚠ 未提供签名密钥，release 将回退为 debug 签名 —— 仅供验证，请勿分发"
+  fi
 fi
 
 # gradlew 优先，缺失时回退到系统 gradle
@@ -102,7 +124,8 @@ EOF
       --no-daemon --stacktrace \
       -Dorg.gradle.jvmargs=-Xmx4g \
       -Dorg.gradle.vfs.watch=false \
-      "${GRADLE_SIGN_ARGS[@]}"
+      "${GRADLE_SIGN_ARGS[@]}" \
+      "${GRADLE_EXTRA_ARGS[@]}"
     ;;
 
   *)
