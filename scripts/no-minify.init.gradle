@@ -1,0 +1,50 @@
+// ============================================================
+//  no-minify.init.gradle
+//
+//  作用：把 release 变体的 R8 混淆与资源裁剪关掉。
+//
+//  用途：release 包一装就闪退、debug 却正常时，先关掉混淆来定位 ——
+//        90% 的情况是缺 keep 规则（反射 / JNI / 序列化被裁掉或改名）。
+//
+//  为什么用 afterEvaluate：
+//        工程自己的 build.gradle 里写着 isMinifyEnabled = true，
+//        必须在它求值「之后」覆盖才生效。
+//
+//  为什么到处 try/catch：AGP 9 引入了 newDsl，老写法可能不可用，
+//        这里尽量兼容而不影响构建。
+// ============================================================
+allprojects { p ->
+    p.afterEvaluate {
+        try {
+            def hasAndroid = p.plugins.hasPlugin('com.android.application') ||
+                             p.plugins.hasPlugin('com.android.library')
+            if (!hasAndroid) return
+
+            def androidExt = p.extensions.findByName('android')
+            if (androidExt == null) {
+                println "[gathub] 未找到 android 扩展，跳过关闭混淆"
+                return
+            }
+
+            def bt = null
+            try {
+                bt = androidExt.buildTypes.findByName('release')
+            } catch (Throwable t) {
+                println "[gathub] 读取 buildTypes 失败: ${t.message}"
+            }
+            if (bt == null) {
+                println "[gathub] 未找到 release 变体，跳过"
+                return
+            }
+
+            try { bt.minifyEnabled = false } catch (Throwable t) {
+                println "[gathub] 关闭 minify 失败: ${t.message}"
+            }
+            try { bt.shrinkResources = false } catch (Throwable ignored) { }
+
+            println "[gathub] ${p.name}: 已关闭 release 的 R8 混淆与资源裁剪"
+        } catch (Throwable t) {
+            println "[gathub] 关闭混淆异常(已忽略): ${t.message}"
+        }
+    }
+}
