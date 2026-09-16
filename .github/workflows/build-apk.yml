@@ -80,12 +80,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          # dispatch 时用 inputs；tag push 时直接构建本仓库自身
-          STYPE='${{ inputs.source_type }}'; [ -z "$STYPE" ] && STYPE='repo'
+          # dispatch 用 inputs；tag push 时构建本仓库自身
+          STYPE='${{ inputs.source_type }}'
           SURL='${{ inputs.source_url }}'
-          [ -z "$SURL" ] && SURL='https://github.com/${{ github.repository }}.git'
-          SREF='${{ inputs.ref }}'
-          [ -z "$SREF" ] && SREF='${{ github.ref_name }}'
+          SREF='${{ inputs.ref }}'          # 留空 = 用源仓库的默认分支
+
+          if [ '${{ github.event_name }}' = 'push' ]; then
+            STYPE='repo'
+            [ -n "$SURL" ] || SURL='https://github.com/${{ github.repository }}.git'
+            [ -n "$SREF" ] || SREF='${{ github.ref_name }}'
+          fi
+
+          [ -n "$STYPE" ] || STYPE='repo'
+          [ -n "$SURL" ] || SURL='https://github.com/${{ github.repository }}.git'
+
+          echo "source_type=$STYPE"
+          echo "source_url=$SURL"
+          echo "source_ref=${SREF:-(默认分支)}"
 
           bash scripts/fetch-source.sh "$STYPE" "$SURL" "$SREF" "$GITHUB_WORKSPACE/_src"
 
