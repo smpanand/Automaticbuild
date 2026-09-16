@@ -1,0 +1,203 @@
+name: build-apk
+
+# ============================================================
+#  通用 APK 云端打包
+#   输入   : 公开 git 仓库 或 源码压缩包直链
+#   支持   : 原生 Android / Flutter / React Native
+#   产物   : debug 或 release(正式签名)
+#
+#  触发方式:
+#   1) workflow_dispatch —— App 调用(推荐),参数由 inputs 传入
+#   2) push tag "build-*" —— 把工程推进本仓库后打 tag 即出包
+# ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_type:
+        description: '源码来源'
+        type: choice
+        options: [repo, asset]
+        default: repo
+      source_url:
+        description: '仓库 URL(https://github.com/user/repo) 或 压缩包直链'
+        required: true
+        type: string
+      ref:
+        description: '分支 / Tag / Commit(仅 repo 模式)'
+        required: false
+        type: string
+      project_path:
+        description: '工程子目录(源码根下的相对路径,可留空)'
+        required: false
+        type: string
+      build_type:
+        description: '构建类型'
+        type: choice
+        options: [debug, release]
+        default: debug
+      build_system:
+        description: '构建系统(auto = 自动探测)'
+        type: choice
+        options: [auto, android, flutter, rn]
+        default: auto
+      module:
+        description: 'Gradle 模块(留空自动探测)'
+        required: false
+        type: string
+      flavor:
+        description: 'Product flavor(可留空)'
+        required: false
+        type: string
+      java_version:
+        description: 'JDK 主版本(auto = 自动探测)'
+        type: choice
+        options: [auto, '8', '11', '17', '21']
+        default: auto
+      sdk_platform:
+        description: 'compileSdk(留空自动探测)'
+        required: false
+        type: string
+
+  push:
+    tags:
+      - 'build-*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: 检出构建脚本
+        uses: actions/checkout@v4
+
+      # ---------- 1. 取源码 ----------
+      - name: 获取源码
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          # dispatch 时用 inputs；tag push 时直接构建本仓库自身
+          STYPE='${{ inputs.source_type }}'; [ -z "$STYPE" ] && STYPE='repo'
+          SURL='${{ inputs.source_url }}'
+          [ -z "$SURL" ] && SURL='https://github.com/${{ github.repository }}.git'
+          SREF='${{ inputs.ref }}'
+          [ -z "$SREF" ] && SREF='${{ github.ref_name }}'
+
+          bash scripts/fetch-source.sh "$STYPE" "$SURL" "$SREF" "$GITHUB_WORKSPACE/_src"
+
+      # ---------- 2. 探测工程 ----------
+      - name: 工程指纹探测
+        id: detect
+        working-directory: ${{ github.workspace }}/_src/${{ inputs.project_path }}
+        run: bash "${{ github.workspace }}/scripts/detect.sh" .
+
+      # ---------- 3. 合并「用户参数」与「探测结果」----------
+      - name: 解析构建参数
+        id: cfg
+        run: |
+          ptype='${{ inputs.build_system }}'
+          if [ -z "$ptype" ] || [ "$ptype" = "auto" ]; then
+            ptype='${{ steps.detect.outputs.ptype }}'
+          fi
+
+          jv='${{ inputs.java_version }}'
+          if [ -z "$jv" ] || [ "$jv" = "auto" ]; then
+            jv='${{ steps.detect.outputs.java }}'
+          fi
+
+          sdk='${{ inputs.sdk_platform }}'
+          if [ -z "$sdk" ]; then
+            sdk='${{ steps.detect.outputs.sdk_platform }}'
+          fi
+
+          mod='${{ inputs.module }}'
+          if [ -z "$mod" ]; then
+            mod='${{ steps.detect.outputs.module }}'
+          fi
+
+          gdir='${{ steps.detect.outputs.gradle_dir }}'
+          [ -z "$gdir" ] && gdir='.'
+
+          {
+            echo "ptype=$ptype"
+            echo "java=$jv"
+            echo "sdk=$sdk"
+            echo "module=$mod"
+            echo "gradle_dir=$gdir"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### 构建参数"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 工程类型 | \`$ptype\` |"
+            echo "| JDK | \`$jv\` |"
+            echo "| compileSdk | \`$sdk\` |"
+            echo "| 模块 | \`$mod\` |"
+            echo "| gradle 目录 | \`$gdir\` |"
+            echo "| 构建类型 | \`${{ inputs.build_type || 'debug' }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------- 4. 环境 ----------
+      - name: 安装 JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ steps.cfg.outputs.java }}
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 SDK 组件
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" \
+                     "platforms;android-${{ steps.cfg.outputs.sdk }}" \
+                     "build-tools;34.0.0"
+
+      - name: 安装 Flutter
+        if: steps.cfg.outputs.ptype == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 配置 Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # ---------- 5. 构建 ----------
+      - name: 构建 APK
+        working-directory: ${{ github.workspace }}/_src/${{ inputs.project_path }}
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KS_PASS:      ${{ secrets.KS_PASS }}
+          KEY_ALIAS:    ${{ secrets.KEY_ALIAS }}
+          KEY_PASS:     ${{ secrets.KEY_PASS }}
+        run: |
+          bash "${{ github.workspace }}/scripts/build.sh" \
+            "${{ steps.cfg.outputs.ptype }}" \
+            "${{ inputs.build_type || 'debug' }}" \
+            "${{ steps.cfg.outputs.module }}" \
+            "${{ steps.cfg.outputs.gradle_dir }}" \
+            "${{ inputs.flavor }}"
+
+      # ---------- 6. 产物 ----------
+      - name: 上传产物(Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ inputs.build_type || 'debug' }}-${{ github.run_number }}
+          path: ${{ github.workspace }}/_src/${{ inputs.project_path }}/_out/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 附到 Release(仅 Tag 触发)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ github.workspace }}/_src/${{ inputs.project_path }}/_out/*.apk
+          generate_release_notes: false
