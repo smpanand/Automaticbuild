@@ -34,19 +34,46 @@ auth_url() {
 case "$TYPE" in
   repo)
     echo "==> git clone ($URL ${REF:+@ $REF})"
-    # 重试 3 次：国内网络对 GitHub 常偶发超时
-    n=0
-    until git clone --depth 1 ${REF:+--branch "$REF"} "$(auth_url "$URL")" "$DEST/.clone" \
-            >/dev/null 2>&1; do
-      n=$((n+1))
-      [ "$n" -ge 3 ] && { echo "!! clone 失败(已重试 $n 次)"; exit 1; }
-      echo "   clone 第 $n 次失败，5s 后重试…"
-      rm -rf "$DEST/.clone"; sleep 5
-    done
-    # --depth 1 的 --branch 只认分支/Tag；若 ref 是 commit 则再补 checkout
-    if [ -n "$REF" ] && ! git -C "$DEST/.clone" rev-parse --verify -q HEAD >/dev/null 2>&1; then
-      git -C "$DEST/.clone" fetch --depth 1 origin "$REF" >/dev/null 2>&1 || true
-      git -C "$DEST/.clone" checkout -q "$REF" 2>/dev/null || true
+    ok=0
+
+    # 1) 优先按指定 ref 克隆
+    if [ -n "$REF" ]; then
+      n=0
+      while [ "$n" -lt 2 ]; do
+        if git clone --depth 1 --branch "$REF" "$(auth_url "$URL")" "$DEST/.clone" >/dev/null 2>&1; then
+          ok=1; break
+        fi
+        n=$((n+1)); rm -rf "$DEST/.clone"; sleep 3
+      done
+      if [ "$ok" -eq 0 ]; then
+        echo "   ⚠ 分支/标签 '$REF' 克隆失败，改用仓库默认分支"
+      fi
+    fi
+
+    # 2) 回退：克隆默认分支（ref 写错 / 默认分支不是 main 的情况）
+    if [ "$ok" -eq 0 ]; then
+      n=0
+      while [ "$n" -lt 3 ]; do
+        if git clone --depth 1 "$(auth_url "$URL")" "$DEST/.clone" >/dev/null 2>&1; then
+          ok=1; break
+        fi
+        n=$((n+1))
+        echo "   clone 第 $n 次失败，5s 后重试…"
+        rm -rf "$DEST/.clone"; sleep 5
+      done
+    fi
+
+    if [ "$ok" -eq 0 ]; then
+      echo "!! clone 失败（已重试）: $URL"
+      exit 1
+    fi
+    echo "   已获取分支: $(git -C "$DEST/.clone" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+
+    # 3) ref 是 commit SHA 时，补一次精确 checkout
+    if [ -n "$REF" ]; then
+      ( cd "$DEST/.clone" \
+        && git fetch --depth 1 origin "$REF" >/dev/null 2>&1 \
+        && git checkout -q FETCH_HEAD >/dev/null 2>&1 ) || true
     fi
     # 去掉 .git 减小体积
     rm -rf "$DEST/.clone/.git"
