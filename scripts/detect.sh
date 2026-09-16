@@ -24,6 +24,34 @@ out() {
 }
 
 # ------------------------------------------------------------
+# 0. 定位真正的工程目录
+#    很多仓库是 monorepo（如 KernelSU 系的 Android 工程在 manager/），
+#    根目录没有 Gradle 文件。这里按「层级从浅到深」向下找一个工程根。
+# ------------------------------------------------------------
+proj_sub=""
+if [ ! -f pubspec.yaml ] && [ ! -f package.json ] \
+   && [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ] \
+   && [ ! -f build.gradle ] && [ ! -f build.gradle.kts ]; then
+  cand=""
+  for d in 1 2 3; do
+    cand="$(find . -mindepth "$d" -maxdepth "$d" \
+            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) 2>/dev/null | head -1)"
+    if [ -z "$cand" ]; then
+      cand="$(find . -mindepth "$d" -maxdepth "$d" -name 'gradlew' 2>/dev/null | head -1)"
+    fi
+    if [ -n "$cand" ]; then break; fi
+  done
+  if [ -n "$cand" ]; then
+    proj_sub="$(dirname "$cand")"
+    proj_sub="${proj_sub#./}"
+    if [ "$proj_sub" = "." ]; then proj_sub=""; fi
+    echo "   当前目录不是工程根，已在子目录找到工程: ${proj_sub:-.}" >&2
+    if [ -n "$proj_sub" ]; then cd "$proj_sub"; fi
+  fi
+fi
+out proj_dir "$proj_sub"
+
+# ------------------------------------------------------------
 # 1. 工程类型
 # ------------------------------------------------------------
 ptype="unknown"
