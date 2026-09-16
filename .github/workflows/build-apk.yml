@@ -34,7 +34,7 @@ on:
       build_type:
         description: '构建类型'
         type: choice
-        options: [debug, release]
+        options: [debug, release, release-nominify]
         default: debug
       build_system:
         description: '构建系统(auto = 自动探测)'
@@ -237,6 +237,7 @@ jobs:
           KS_PASS:      ${{ secrets.KS_PASS }}
           KEY_ALIAS:    ${{ secrets.KEY_ALIAS }}
           KEY_PASS:     ${{ secrets.KEY_PASS }}
+          GATHUB_SCRIPTS: ${{ github.workspace }}/scripts
         run: |
           bash "${{ github.workspace }}/scripts/build.sh" \
             "${{ steps.cfg.outputs.ptype }}" \
