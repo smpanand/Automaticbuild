@@ -133,12 +133,21 @@ jobs:
           gdir='${{ steps.detect.outputs.gradle_dir }}'
           [ -z "$gdir" ] && gdir='.'
 
+          # 实际工作目录 = _src + project_path + 探测到的工程子目录
+          proj='${{ inputs.project_path }}'
+          sub='${{ steps.detect.outputs.proj_dir }}'
+          wd="${GITHUB_WORKSPACE}/_src"
+          if [ -n "$proj" ]; then wd="${wd}/${proj}"; fi
+          if [ -n "$sub" ];  then wd="${wd}/${sub}";  fi
+          wd="$(printf '%s' "$wd" | tr -s '/')"      # 去掉重复斜杠
+
           {
             echo "ptype=$ptype"
             echo "java=$jv"
             echo "sdk=$sdk"
             echo "module=$mod"
             echo "gradle_dir=$gdir"
+            echo "workdir=$wd"
           } >> "$GITHUB_OUTPUT"
 
           {
@@ -151,6 +160,7 @@ jobs:
             echo "| compileSdk | \`$sdk\` |"
             echo "| 模块 | \`$mod\` |"
             echo "| gradle 目录 | \`$gdir\` |"
+            echo "| 工作目录 | \`$wd\` |"
             echo "| 构建类型 | \`${{ inputs.build_type || 'debug' }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -221,7 +231,7 @@ jobs:
 
       # ---------- 5. 构建 ----------
       - name: 构建 APK
-        working-directory: ${{ github.workspace }}/_src/${{ inputs.project_path }}
+        working-directory: ${{ steps.cfg.outputs.workdir }}
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
           KS_PASS:      ${{ secrets.KS_PASS }}
@@ -240,7 +250,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: apk-${{ inputs.build_type || 'debug' }}-${{ github.run_number }}
-          path: ${{ github.workspace }}/_src/${{ inputs.project_path }}/_out/*.apk
+          path: ${{ steps.cfg.outputs.workdir }}/_out/*.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -258,7 +268,7 @@ jobs:
             - 构建类型: ${{ inputs.build_type || 'debug' }}
             - 构建系统: ${{ inputs.build_system || 'auto' }}
             - 运行编号: #${{ github.run_number }}
-          files: ${{ github.workspace }}/_src/${{ inputs.project_path }}/_out/*.apk
+          files: ${{ steps.cfg.outputs.workdir }}/_out/*.apk
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
