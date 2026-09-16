@@ -69,13 +69,15 @@ done
 #    - settings.gradle:   id 'com.android.application' version '8.2.0'
 # ------------------------------------------------------------
 agp_ver=""
-agp_ver="$(grep -rhoE 'com\.android\.tools\.build:gradle:[0-9]+\.[0-9]+\.[0-9]+' \
+# 形式一：classpath 'com.android.tools.build:gradle:8.2.0'
+agp_ver="$(grep -rhoE 'com\.android\.tools\.build:gradle:[0-9]+(\.[0-9]+)+' \
   --include='*.gradle' --include='*.gradle.kts' . 2>/dev/null \
-  | head -1 | sed 's/.*://' || true)"
+  | grep -oE '[0-9]+(\.[0-9]+)+' | head -1 || true)"
+# 形式二：id("com.android.application") version "9.2.0"（Kotlin DSL 常见写法）
 if [ -z "$agp_ver" ]; then
-  agp_ver="$(grep -rhoE "com\.android\.(application|library)['\"]? +version +['\"][0-9]+\.[0-9]+\.[0-9]+" \
+  agp_ver="$(grep -rhE 'com\.android\.(application|library)' \
     --include='*.gradle' --include='*.gradle.kts' . 2>/dev/null \
-    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+    | grep -oE '[0-9]+(\.[0-9]+)+' | head -1 || true)"
 fi
 
 # ------------------------------------------------------------
@@ -84,18 +86,17 @@ fi
 java=17                                  # 缺省：当代 Android 工程的普遍选择
 if [ -n "$gradle_ver" ]; then
   case "${gradle_ver%%.*}" in
-    4|5|6)      java=11 ;;
-    7)          java=11 ;;
-    8|9|10|11)  java=17 ;;
-    *)          java=17 ;;
+    4|5|6|7)     java=11 ;;
+    8)           java=17 ;;
+    *)           java=21 ;;            # Gradle 9+ 通常需要 JDK 21
   esac
 fi
 if [ -n "$agp_ver" ]; then
   case "${agp_ver%%.*}" in
-    2|3|4)      java=11 ;;             # 老 AGP 强制降级
-    5|6|7)      [ "$java" -gt 11 ] && java=11 || true ;;
-    8|9)        java=17 ;;
-    *)          java=17 ;;
+    2|3|4)       java=11 ;;            # 老 AGP 强制降级
+    5|6|7)       [ "$java" -gt 11 ] && java=11 || true ;;
+    8)           java=17 ;;
+    *)           java=21 ;;            # AGP 9+
   esac
 fi
 
@@ -108,13 +109,31 @@ sdk_platform="$(grep -rhoE 'compileSdk(Version)?[[:space:]]*[=:]?[[:space:]]*[0-
 [ -z "$sdk_platform" ] && sdk_platform=34
 
 # ------------------------------------------------------------
+# 6.5 是否需要 NDK / 原生构建
+# ------------------------------------------------------------
+needs_ndk="false"
+if grep -rqE 'ndkVersion|externalNativeBuild|CMakeLists|jniLibs|ndk[[:space:]]*\{' \
+     --include='*.gradle' --include='*.gradle.kts' . 2>/dev/null; then
+  needs_ndk="true"
+fi
+[ -d app/src/main/cpp ] && needs_ndk="true"
+[ -d src/main/cpp ] && needs_ndk="true"
+
+ndk_ver="$(grep -rhoE 'ndkVersion[^0-9]*[0-9]+(\.[0-9]+)+' \
+  --include='*.gradle' --include='*.gradle.kts' . 2>/dev/null \
+  | grep -oE '[0-9]+(\.[0-9]+)+' | head -1 || true)"
+
+out needs_ndk   "$needs_ndk"
+out ndk_ver     "$ndk_ver"
+
+# ------------------------------------------------------------
 # 7. 模块名
 # ------------------------------------------------------------
 module=":app"
 if [ -f settings.gradle ] || [ -f settings.gradle.kts ]; then
   sf="settings.gradle"; [ -f settings.gradle.kts ] && sf="settings.gradle.kts"
   found="$(grep -oE "include[[:space:]]*\(?[[:space:]]*['\"]:[A-Za-z0-9_.-]+" "$sf" 2>/dev/null \
-    | grep -oE "':?[A-Za-z0-9_.-]+" | tr -d "'" | head -1 || true)"
+    | grep -oE "['\"]:?[A-Za-z0-9_.-]+" | tr -d "'\"" | head -1 || true)"
   [ -n "$found" ] && module=":${found#:}"
 fi
 
