@@ -227,9 +227,21 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: 附到 Release(仅 Tag 触发)
-        if: github.ref_type == 'tag'
+      # 构建完成直接在云端发布到 Release：
+      # APK 已在 runner 上，直接上传即可 —— App 端不用先下载再回传
+      - name: 发布到 Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('apk-{0}', github.run_number) }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || format('APK-{0}-{1}', github.run_number, inputs.build_type || 'debug') }}
+          body: |
+            由 gathub 自动构建
+            - 源码: ${{ inputs.source_url || github.repository }}
+            - ref: ${{ inputs.ref || '(默认分支)' }}
+            - 构建类型: ${{ inputs.build_type || 'debug' }}
+            - 构建系统: ${{ inputs.build_system || 'auto' }}
+            - 运行编号: #${{ github.run_number }}
           files: ${{ github.workspace }}/_src/${{ inputs.project_path }}/_out/*.apk
           generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
