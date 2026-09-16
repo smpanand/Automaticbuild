@@ -25,13 +25,21 @@ MODULE="${3:-:app}"
 GRADLE_DIR="${4:-.}"
 FLAVOR="${5:-}"
 
+# release-nominify：仍是 release 变体，但关掉 R8 混淆与资源裁剪
+# （release 包闪退、debug 正常时，用来定位是不是混淆导致的）
+NO_MINIFY="false"
+case "$BUILD_TYPE" in
+  release-nominify) GRADLE_BT="release"; NO_MINIFY="true" ;;
+  *)                GRADLE_BT="$BUILD_TYPE" ;;
+esac
+
 OUT_DIR="$PWD/_out"
 rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR"
 
 # 首字母大写(用于 assemble<Flavor><Type> 任务名)
 capitalize() { printf '%s' "$1" | sed 's/^\(.\)/\U\1/'; }
 
-BT_CAP="$(capitalize "$BUILD_TYPE")"      # Debug / Release
+BT_CAP="$(capitalize "$GRADLE_BT")"      # Debug / Release
 FLAVOR_CAP=""
 if [ -n "$FLAVOR" ]; then
   FLAVOR_CAP="$(capitalize "$FLAVOR")"
@@ -41,7 +49,7 @@ fi
 # 1. 准备签名
 # ------------------------------------------------------------
 KS_FILE=""
-if [ "$BUILD_TYPE" = "release" ] && [ -n "${KEYSTORE_B64:-}" ]; then
+if [ "$GRADLE_BT" = "release" ] && [ -n "${KEYSTORE_B64:-}" ]; then
   KS_FILE="$PWD/.ci-signing.jks"
   printf '%s' "$KEYSTORE_B64" | base64 -d > "$KS_FILE"
   echo "==> 已还原签名库($(du -h "$KS_FILE" | cut -f1))"
@@ -75,8 +83,19 @@ else
   # 这类工程 buildTypes.release{} 里有 throw，不传开关连 assembleDebug 都会在
   # 配置阶段直接失败。未知该属性的工程会忽略它，所以加上是安全的。
   GRADLE_EXTRA_ARGS+=("-PallowDebugSignedRelease=true")
-  if [ "$BUILD_TYPE" = "release" ]; then
+  if [ "$GRADLE_BT" = "release" ]; then
     echo "    ⚠ 未提供签名密钥，release 将回退为 debug 签名 —— 仅供验证，请勿分发"
+  fi
+fi
+
+# 关闭 R8 混淆（release 闪退排查用）
+if [ "$NO_MINIFY" = "true" ]; then
+  INIT_SCRIPT="${GATHUB_SCRIPTS:-}/no-minify.init.gradle"
+  if [ -f "$INIT_SCRIPT" ]; then
+    GRADLE_EXTRA_ARGS+=("--init-script" "$INIT_SCRIPT")
+    echo "    ✔ 已启用「关闭 R8 混淆与资源裁剪」(release 闪退排查用)"
+  else
+    echo "    ⚠ 未找到 $INIT_SCRIPT ，无法关闭混淆"
   fi
 fi
 
@@ -100,7 +119,7 @@ run_gradle() {
 case "$PTYPE" in
   flutter)
     echo "==> Flutter 工程"
-    if [ -n "$KS_FILE" ] && [ "$BUILD_TYPE" = "release" ] && [ -d android ]; then
+    if [ -n "$KS_FILE" ] && [ "$GRADLE_BT" = "release" ] && [ -d android ]; then
       # Flutter 官方模板从 android/key.properties 读取签名
       cat > android/key.properties <<EOF
 storeFile=$KS_FILE
@@ -110,7 +129,7 @@ keyPassword=${KEY_PASS:-}
 EOF
       echo "    已写入 android/key.properties"
     fi
-    FLUTTER_ARGS=(build apk "--$BUILD_TYPE")
+    FLUTTER_ARGS=(build apk "--$GRADLE_BT")
     if [ -n "$FLAVOR" ]; then
       FLUTTER_ARGS+=(--flavor "$FLAVOR")
     fi
