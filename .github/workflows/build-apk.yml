@@ -190,7 +190,24 @@ jobs:
           sdkmanager "platform-tools" \
                      "platforms;android-${{ steps.cfg.outputs.sdk }}" \
                      "build-tools;34.0.0" \
-            || echo "::warning::sdkmanager 安装组件失败，继续尝试构建（runner 通常已预装所需组件）"
+            || echo "::warning::sdkmanager 安装基础组件失败，继续尝试构建"
+
+          # 工程含原生代码时补齐 NDK / CMake
+          if [ "${{ steps.detect.outputs.needs_ndk }}" = "true" ]; then
+            echo "检测到原生构建需求，安装 NDK / CMake"
+            sdkmanager "cmake;3.22.1" || true
+            NDK="${{ steps.detect.outputs.ndk_ver }}"
+            if [ -n "$NDK" ]; then
+              echo "按工程声明的 ndkVersion 安装: $NDK"
+              sdkmanager "ndk;$NDK" || echo "::warning::NDK $NDK 安装失败"
+            else
+              echo "工程未声明 ndkVersion，安装一个常用的"
+              sdkmanager "ndk;27.0.12077973" || echo "::warning::NDK 安装失败"
+            fi
+          fi
+
+          echo "---------------- 当前已安装组件 ----------------"
+          sdkmanager --list_installed 2>/dev/null | tail -40 || true
 
       - name: 安装 Flutter
         if: steps.cfg.outputs.ptype == 'flutter'
